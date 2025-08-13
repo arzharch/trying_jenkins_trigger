@@ -4,29 +4,23 @@ pipeline {
     stages {
         stage('Clone Repo') {
             steps {
-                echo 'Cloning public repo...'
-                // Repo is auto-cloned by Jenkins when using "Pipeline script from SCM"
-            }
-        }
+                script {
+                    try {
+                        // Clone your public GitHub repo (no credentials needed)
+                        git url: 'https://github.com/arzharch/trying_jenkins_trigger.git'
 
-        stage('Install & Run Tests') {
-            steps {
-                echo 'Running tests...'
-                // Replace the following line with your actual test command
-                sh './run_tests.sh'
+                        echo 'Flow successful'
+                    } catch (err) {
+                        error "Cloning failed: ${err.message}"
+                    }
+                }
             }
         }
     }
 
     post {
-        success {
-            echo '✅ Flow successful!'
-        }
-        failure {
-            echo '❌ Flow failed.'
-        }
         always {
-            cleanWs() // Clean up workspace
+            cleanWs()
         }
     }
 }
