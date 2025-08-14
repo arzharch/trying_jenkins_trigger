@@ -167,4 +167,75 @@ def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
             path += "${query}=${URLEncoder.encode(queryValue as String, "UTF-8")}&"
         }
     }
-    return new URL(path.substring(0,
+    return new URL(path.substring(0, path.length() - 1))
+}
+
+boolean scenariosPresent(String baseUrl, String testId) {
+    URL url = new URL("${baseUrl}/projects/${params['Project ID']}/tests/${testId}")
+    def scenarioPage = getRequest(url, "Dataset");
+    return scenarioPage["Parameters"].size() >= 1
+}
+
+boolean isRunWithDatasetOptionSelected() {
+    def value = params['Run with datasets']
+    if (value != null) {
+        return value
+    }
+    value = params['Run with scenarios']
+    if (value != null) {
+        return value
+    }
+}
+
+def getEnvIdAndName(String baseUrl) {
+    echo "Retrieving environment"
+    if (params['Environment'] == null || params['Environment'].toString().isEmpty()) {
+        def (envId, envName) = getDefaultEnv(baseUrl);
+        echo "Using the current default environment '${envName}'"
+        return [envId, envName];
+    }
+    def env = getEnvByName(baseUrl, params['Environment'].toString());
+    if (env == null) {
+        throw new NoSuchElementException("The '${params['Environment']}' environment does not exists")
+    }
+    return env;
+}
+
+def getDefaultEnv(String baseUrl) {
+    URL url = new URL("${baseUrl}/projects/${params['Project ID']}/environments/default");
+    def environment = getRequest(url, "Default Environment");
+    return [environment["Id"], environment["Name"]]
+}
+
+def getEnvByName(String baseUrl, String envName) {
+    String cursor = ""
+    boolean fetchEnvironmentPage = true
+    while (fetchEnvironmentPage) {
+        URL url = addQueryParameterToUrl("${baseUrl}/projects/${params['Project ID']}/environments",  [
+                q: envName,
+                cursor: cursor
+        ])
+        def environments = getRequest(url, "Environment");
+        for (environment in environments["Items"]) {
+            if (environment["Name"].toString() == envName) {
+                return [environment["Id"], environment["Name"]]
+            }
+        }
+        cursor = environments.Info.Next
+        fetchEnvironmentPage = environments.Info.HasNext
+    }
+    return null;
+}
+
+def getRequest(URL url, String requestedFor) {
+    HttpURLConnection conn = url.openConnection()
+    conn.setRequestMethod("GET")
+    conn.setDoInput(true)
+    conn.setRequestProperty("Authorization", "APIKEY $useMangoApiKey")
+    conn.connect()
+    if (conn.responseCode == 200) {
+        String content = conn.getInputStream().getText()
+        return new JsonSlurper().parseText(content)
+    }
+    throw new Exception("${requestedFor} GET request failed with code: ${conn.responseCode}")
+}
