@@ -1,11 +1,10 @@
-// Jenkinsfile
 import groovy.json.JsonSlurper
 import java.net.URL
 import java.net.HttpURLConnection
 import java.net.URLEncoder
+import java.util.concurrent.TimeUnit
 import java.util.NoSuchElementException
 
-// All helper functions are now defined at the top level, outside of the 'pipeline' block.
 def getRunId() {
     if (fileExists("multidataset_run.log")) {
         return powershell(returnStdout: true, script: 'Write-Output (Get-Content .\\multidataset_run.log | select -First 1 | Select-String -Pattern \'.*\\"RunId\\": \\"([^\\"]*)\\"\').Matches.Groups[1].Value')
@@ -64,7 +63,7 @@ def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
         def query = keyValue.getKey()
         def queryValue = keyValue.getValue()
         if (queryValue instanceof ArrayList) {
-            queryValue.each { value ->
+            queryValue.each { value -> 
                 path += "${query}=${URLEncoder.encode(value as String, 'UTF-8')}&"
             }
         } else {
@@ -158,6 +157,7 @@ pipeline {
                 checkout scm
             }
         }
+
         stage('Run useMango Tests') {
             steps {
                 script {
@@ -179,7 +179,7 @@ pipeline {
                         def tests = getTests(TEST_SERVICE_URL)
                         def testJobs = [:]
 
-                        tests.eachWithIndex { test, index ->
+                        tests.eachWithIndex { test, index -> 
                             echo "Scheduling ${test.Name}"
                             testJobs[test.Id] = {
                                 node('usemango') {
@@ -221,7 +221,7 @@ pipeline {
                                                     }
                                                 } catch (Exception ex) {
                                                     String run_id = getRunId()
-                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Exception occured: ${ex.getMessage()} - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
+                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Exception occurred: ${ex.getMessage()} - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
                                                 } finally {
                                                     if (fileExists("result.xml")) {
                                                         junit "result.xml"
@@ -272,6 +272,33 @@ pipeline {
 
                         // Archive the log file for download
                         archiveArtifacts artifacts: 'logs.txt', allowEmptyArchive: true
+                    }
+                }
+            }
+        }
+
+        stage('GitHub Checks') {
+            steps {
+                script {
+                    def startTime = System.currentTimeMillis()
+                    def timeout = 7  // 7 seconds timeout
+                    def checkCompleted = false
+
+                    try {
+                        while (System.currentTimeMillis() - startTime < timeout * 1000) {
+                            // Try to send results to GitHub if needed
+                            echo "Sending results to GitHub checks..."
+                            // Place your GitHub check integration code here
+                            
+                            checkCompleted = true
+                            break
+                        }
+
+                        if (!checkCompleted) {
+                            echo "GitHub checks timed out after ${timeout} seconds."
+                        }
+                    } catch (Exception e) {
+                        echo "Error while sending results to GitHub: ${e.message}"
                     }
                 }
             }
