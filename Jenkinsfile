@@ -1,4 +1,3 @@
-// Jenkinsfile
 import groovy.json.JsonSlurper
 import java.net.URL
 import java.net.HttpURLConnection
@@ -15,6 +14,7 @@ def getRunId() {
     }
     return null
 }
+
 def getTests(String baseUrl) {
     String cursor = ""
     def tests = []
@@ -34,6 +34,7 @@ def getTests(String baseUrl) {
     }
     return tests
 }
+
 def getScenarios(String baseUrl, String testId){
     def scenarios = [[Id: "0", Name: "Default"]]
     def runWithDataset = isRunWithDatasetOptionSelected()
@@ -52,7 +53,12 @@ def getScenarios(String baseUrl, String testId){
     }
     return null
 }
+
 def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
+    // Ensure the URL starts with a protocol
+    if (!path.startsWith("http://") && !path.startsWith("https://")) {
+        path = "https://" + path
+    }
     if (queryParams.isEmpty()) {
         return new URL(path)
     }
@@ -61,7 +67,7 @@ def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
         def query = keyValue.getKey()
         def queryValue = keyValue.getValue()
         if (queryValue instanceof ArrayList) {
-            queryValue.each { value ->
+            queryValue.each { value -> 
                 path += "${query}=${URLEncoder.encode(value as String, 'UTF-8')}&"
             }
         } else {
@@ -70,11 +76,13 @@ def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
     }
     return new URL(path.substring(0, path.length() - 1))
 }
+
 boolean scenariosPresent(String baseUrl, String testId) {
     URL url = new URL("${baseUrl}/projects/${params['Project ID']}/tests/${testId}")
     def scenarioPage = getRequest(url, "Dataset");
     return scenarioPage["Parameters"].size() >= 1
 }
+
 boolean isRunWithDatasetOptionSelected() {
     def value = params['Run with datasets']
     if (value != null) {
@@ -86,6 +94,7 @@ boolean isRunWithDatasetOptionSelected() {
         return value
     }
 }
+
 def getEnvIdAndName(String baseUrl) {
     echo "Retrieving environment"
     if (params['Environment'] == null || params['Environment'].toString().isEmpty()) {
@@ -99,11 +108,13 @@ def getEnvIdAndName(String baseUrl) {
     }
     return env;
 }
+
 def getDefaultEnv(String baseUrl) {
     URL url = new URL("${baseUrl}/projects/${params['Project ID']}/environments/default");
     def environment = getRequest(url, "Default Environment");
     return [environment["Id"], environment["Name"]]
 }
+
 def getEnvByName(String baseUrl, String envName) {
     String cursor = ""
     boolean fetchEnvironmentPage = true
@@ -123,6 +134,7 @@ def getEnvByName(String baseUrl, String envName) {
     }
     return null;
 }
+
 def getRequest(URL url, String requestedFor) {
     HttpURLConnection conn = url.openConnection()
     conn.setRequestMethod("GET")
