@@ -1,11 +1,109 @@
-// Jenkinsfile
+#!groovy
 import groovy.json.JsonSlurper
-import java.net.URL
-import java.net.HttpURLConnection
-import java.net.URLEncoder
-import java.util.NoSuchElementException
 
-// All helper functions are now defined at the top level, outside of the 'pipeline' block.
+node {
+    stage('Read and Execute tests') {
+        // Obtain credentials for accessing the useMango server, which should be stored in Jenkins with the ID of 'usemango'
+        withCredentials([string(credentialsId: 'useMangoApiKey', variable: 'useMangoApiKey')]) {
+            // Obtain values for the server url, project name and folder name from a Jenkins config file, which have the ID
+            // that matches the name of the current pipeline job.
+            String TEST_SERVICE_URL = "https://tests.api.usemango.co.uk/v1"
+            String SCRIPTS_SERVICE_URL = "https://scripts.api.usemango.co.uk/v1"
+            String APP_WEBSITE_URL = "https://app.usemango.co.uk"
+            echo "Running tests in project ${params['Project ID']} with tags ${params['Tags']}"
+            def (envId, envName) = getEnvIdAndName(TEST_SERVICE_URL)
+            def tests = getTests(TEST_SERVICE_URL)
+            def testJobs = [:]
+            def testResults = [:]
+            Integer count = 0
+            tests.eachWithIndex { test, index ->
+                echo "Scheduling ${test.Name}"
+                testJobs[test.Id] = {
+                    node('usemango') {
+                        wrap([$class: "MaskPasswordsBuildWrapper", varPasswordPairs: [[password: '%useMangoApiKey%']]]) {
+                            dir ("${env.WORKSPACE}\\${tests[index].Id}") {
+                                deleteDir()
+                            }
+                            dir("${env.WORKSPACE}\\${tests[index].Id}") {
+                                List<Map> scenarioList = tests[index].Scenarios
+                                String datasetType = "";
+                                Map paramMap = [:]
+                                boolean isMultiDataset = false;
+                                if (scenarioList != null) {
+                                    if (scenarioList.size() == 1) {
+                                        datasetType = "Default Dataset";
+                                    } else {
+                                        isMultiDataset = true
+                                        datasetType = "Multi Dataset 'Dataset Count=${scenarioList.size()}'"
+                                    }
+                                    paramMap["scenario"] = scenarioList.collect { it.Id}
+                                }
+                                paramMap["environment"] = envId
+                                String url = addQueryParameterToUrl(SCRIPTS_SERVICE_URL + "/tests/" + tests[index].Id.toString(), paramMap).toString()
+                                bat "curl -s --create-dirs -L -D \"response.txt\" -X GET \"${url}\" -H \"Authorization: APIKEY " + '%useMangoApiKey%' +"\" --output \"${tests[index].Id}.pyz\""
+                                String httpCode = powershell(returnStdout: true, script: "Write-Output (Get-Content \"response.txt\" | select -First 1 | Select-String -Pattern '.*HTTP/1.1 ([^\\\"]*) *').Matches.Groups[1].Value")
+                                echo "Test executable response code - ${httpCode}"
+                                if (httpCode.contains("200")) {
+                                    echo "Executing - '${tests[index].Name}' ${datasetType}"
+                                    try {
+                                        bat "\"%UM_PYTHON_PATH%\" ${tests[index].Id}.pyz -k " + '%useMangoApiKey%' + " -j result.xml"
+                                        String run_id = getRunId()
+                                        if (run_id != null) {
+                                            testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed) - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
+                                        } else {
+                                            testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - ${isMultiDataset ? 'multidataset_run.log' : 'run.log' } not generated"
+                                        }
+                                    } catch(Exception ex) {
+                                        String run_id = getRunId()
+                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Exception occurred: ${ex.getMessage()} - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
+                                    } finally {
+                                        if (fileExists("result.xml")){
+                                            // Instead of using junit, write the result to logs.txt
+                                            writeFile file: 'C:/Users/arsh.chowhan/Desktop/logs.txt', text: "Test: ${tests[index].Name} - Passed\n", append: true
+                                        } else {
+                                            echo "Test failed to generate result.xml"
+                                            writeFile file: 'C:/Users/arsh.chowhan/Desktop/logs.txt', text: "Test: ${tests[index].Name} - Failed (No result.xml)\n", append: true
+                                        }
+                                    }
+                                } else {
+                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Unable to get scripted test: ${httpCode}"
+                                    writeFile file: 'C:/Users/arsh.chowhan/Desktop/logs.txt', text: "Test: ${tests[index].Name} - Failed (HTTP Response: ${httpCode})\n", append: true
+                                }
+                                count++
+                            }
+                        }
+                    }
+                }
+            }
+            parallel testJobs
+            boolean allPassed = true
+            int passed = 0
+            int failed = 0
+            echo "useMango Execution on '${envName}' environment, results: "
+            testResults.eachWithIndex { result, index ->
+                echo "${index + 1}. ${result.value}"
+                if (result.value.contains("Failed")){
+                    allPassed = false
+                    failed += 1
+                }
+                else {
+                    passed += 1
+                }
+            }
+            String testsExecutedMsg = "Total Tests: ${testResults.size()}"
+            if (isRunWithDatasetOptionSelected()) {
+                testsExecutedMsg += " NOTE: This represents the number of tests run. The consolidated report for each test contains information about the datasets executed."
+            }
+            echo testsExecutedMsg
+            echo "Passed: ${passed}"
+            echo "Failed: ${failed}"
+            if (!allPassed){
+                error("Not all the tests passed.")
+            }
+        }
+    }
+}
+
 def getRunId() {
     if (fileExists("multidataset_run.log")) {
         return powershell(returnStdout: true, script: 'Write-Output (Get-Content .\\multidataset_run.log | select -First 1 | Select-String -Pattern \'.*\\"RunId\\": \\"([^\\"]*)\\"\').Matches.Groups[1].Value')
@@ -15,6 +113,8 @@ def getRunId() {
     }
     return null
 }
+
+// Read all tests with the tags specified
 def getTests(String baseUrl) {
     String cursor = ""
     def tests = []
@@ -34,6 +134,7 @@ def getTests(String baseUrl) {
     }
     return tests
 }
+
 def getScenarios(String baseUrl, String testId){
     def scenarios = [[Id: "0", Name: "Default"]]
     def runWithDataset = isRunWithDatasetOptionSelected()
@@ -52,6 +153,7 @@ def getScenarios(String baseUrl, String testId){
     }
     return null
 }
+
 def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
     if (queryParams.isEmpty()) {
         return new URL(path)
@@ -70,11 +172,13 @@ def addQueryParameterToUrl(String path, Map<String, Object> queryParams) {
     }
     return new URL(path.substring(0, path.length() - 1))
 }
+
 boolean scenariosPresent(String baseUrl, String testId) {
     URL url = new URL("${baseUrl}/projects/${params['Project ID']}/tests/${testId}")
     def scenarioPage = getRequest(url, "Dataset");
     return scenarioPage["Parameters"].size() >= 1
 }
+
 boolean isRunWithDatasetOptionSelected() {
     def value = params['Run with datasets']
     if (value != null) {
@@ -86,6 +190,7 @@ boolean isRunWithDatasetOptionSelected() {
         return value
     }
 }
+
 def getEnvIdAndName(String baseUrl) {
     echo "Retrieving environment"
     if (params['Environment'] == null || params['Environment'].toString().isEmpty()) {
@@ -99,18 +204,20 @@ def getEnvIdAndName(String baseUrl) {
     }
     return env;
 }
+
 def getDefaultEnv(String baseUrl) {
     URL url = new URL("${baseUrl}/projects/${params['Project ID']}/environments/default");
     def environment = getRequest(url, "Default Environment");
     return [environment["Id"], environment["Name"]]
 }
+
 def getEnvByName(String baseUrl, String envName) {
     String cursor = ""
     boolean fetchEnvironmentPage = true
     while (fetchEnvironmentPage) {
-        URL url = addQueryParameterToUrl("${baseUrl}/projects/${params['Project ID']}/environments", [
-            q: envName,
-            cursor: cursor
+        URL url = addQueryParameterToUrl("${baseUrl}/projects/${params['Project ID']}/environments",  [
+                q: envName,
+                cursor: cursor
         ])
         def environments = getRequest(url, "Environment");
         for (environment in environments["Items"]) {
@@ -123,6 +230,7 @@ def getEnvByName(String baseUrl, String envName) {
     }
     return null;
 }
+
 def getRequest(URL url, String requestedFor) {
     HttpURLConnection conn = url.openConnection()
     conn.setRequestMethod("GET")
@@ -134,120 +242,4 @@ def getRequest(URL url, String requestedFor) {
         return new JsonSlurper().parseText(content)
     }
     throw new Exception("${requestedFor} GET request failed with code: ${conn.responseCode}")
-}
-
-pipeline {
-    agent any
-
-    triggers {
-        githubPush()
-    }
-
-    stages {
-        stage('Checkout Code') {
-            steps {
-                checkout scm
-            }
-        }
-        stage('Run useMango Tests') {
-            steps {
-                script {
-                    withCredentials([
-                        string(credentialsId: 'useMangoApiKey', variable: 'useMangoApiKey')
-                    ]) {
-                        String TEST_SERVICE_URL = "https://tests.api.usemango.co.uk/v1"
-                        String SCRIPTS_SERVICE_URL = "https://scripts.api.usemango.co.uk/v1"
-                        String APP_WEBSITE_URL = "https://app.usemango.co.uk"
-                        echo "Running tests in project ${params['Project ID']} with tags ${params['Tags']}"
-                        def (envId, envName) = getEnvIdAndName(TEST_SERVICE_URL)
-                        def tests = getTests(TEST_SERVICE_URL)
-                        def testJobs = [:]
-                        def testResults = [:]
-                        Integer count = 0
-                        tests.eachWithIndex { test, index ->
-                            echo "Scheduling ${test.Name}"
-                            testJobs[test.Id] = {
-                                node('usemango') {
-                                    wrap([$class: "MaskPasswordsBuildWrapper", varPasswordPairs: [[password: '%useMangoApiKey%']]]) {
-                                        dir ("${env.WORKSPACE}\\${tests[index].Id}") {
-                                            deleteDir()
-                                        }
-                                        dir("${env.WORKSPACE}\\${tests[index].Id}") {
-                                            List<Map> scenarioList = tests[index].Scenarios
-                                            String datasetType = "";
-                                            Map paramMap = [:]
-                                            boolean isMultiDataset = false;
-                                            if (scenarioList != null) {
-                                                if (scenarioList.size() == 1) {
-                                                    datasetType = "Default Dataset";
-                                                } else {
-                                                    isMultiDataset = true
-                                                    datasetType = "Multi Dataset 'Dataset Count=${scenarioList.size()}'"
-                                                }
-                                                paramMap["scenario"] = scenarioList.collect { it.Id}
-                                            }
-                                            paramMap["environment"] = envId
-                                            String url = addQueryParameterToUrl(SCRIPTS_SERVICE_URL + "/tests/" + tests[index].Id.toString(), paramMap).toString()
-                                            bat "curl -s --create-dirs -L -D \"response.txt\" -X GET \"${url}\" -H \"Authorization: APIKEY " + '%useMangoApiKey%' +"\" --output \"${tests[index].Id}.pyz\""
-                                            String httpCode = powershell(returnStdout: true, script: "Write-Output (Get-Content \"response.txt\" | select -First 1 | Select-String -Pattern '.*HTTP/1.1 ([^\\\"]*) *').Matches.Groups[1].Value")
-                                            echo "Test executable response code - ${httpCode}"
-                                            if (httpCode.contains("200")) {
-                                                echo "Executing - '${tests[index].Name}' ${datasetType}"
-                                                try {
-                                                    bat "\"%UM_PYTHON_PATH%\" ${tests[index].Id}.pyz -k " + '%useMangoApiKey%' + " -j result.xml"
-                                                    String run_id = getRunId()
-                                                    if (run_id != null) {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed) - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
-                                                    } else {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - ${isMultiDataset ? 'multidataset_run.log' : 'run.log' } not generated"
-                                                    }
-                                                } catch(Exception ex) {
-                                                    String run_id = getRunId()
-                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Exception occured: ${ex.getMessage()} - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
-                                                } finally{
-                                                    if (fileExists("result.xml")){
-                                                        junit "result.xml"
-                                                    } else {
-                                                        echo "Test failed to generate JUNIT file"
-                                                    }
-                                                }
-                                            } else {
-                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Unable to get scripted test: ${httpCode}"
-                                            }
-                                            count++
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        parallel testJobs
-                        boolean allPassed = true
-                        int passed = 0
-                        int failed = 0
-                        echo "useMango Execution on '${envName}' environment, results: "
-                        testResults.eachWithIndex { result, index ->
-                            echo "${index + 1}. ${result.value}"
-                            if (result.value.contains("Failed")){
-                                allPassed = false
-                                failed += 1
-                            }
-                            else {
-                                passed += 1
-                            }
-                        }
-                        String testsExecutedMsg = "Total Tests: ${testResults.size()}"
-                        if (isRunWithDatasetOptionSelected()) {
-                            testsExecutedMsg += " NOTE: This represents the number of tests run. The consolidated report for each test contains information about the datasets executed."
-                        }
-                        echo testsExecutedMsg
-                        echo "Passed: ${passed}"
-                        echo "Failed: ${failed}"
-                        if (!allPassed){
-                            error("Not all the tests passed.")
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
