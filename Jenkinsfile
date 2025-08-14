@@ -2,7 +2,6 @@ import groovy.json.JsonSlurper
 import java.net.URL
 import java.net.HttpURLConnection
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 import java.util.NoSuchElementException
 
 def getRunId() {
@@ -147,10 +146,6 @@ def getRequest(URL url, String requestedFor) {
 pipeline {
     agent any
 
-    triggers {
-        githubPush()
-    }
-
     stages {
         stage('Checkout Code') {
             steps {
@@ -216,89 +211,37 @@ pipeline {
                                                     String run_id = getRunId()
                                                     if (run_id != null) {
                                                         testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed) - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
+                                                        passed++
                                                     } else {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - ${isMultiDataset ? 'multidataset_run.log' : 'run.log' } not generated"
+                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - No RunId found"
+                                                        failed++
                                                     }
-                                                } catch (Exception ex) {
-                                                    String run_id = getRunId()
-                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Exception occurred: ${ex.getMessage()} - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
-                                                } finally {
-                                                    if (fileExists("result.xml")) {
-                                                        junit "result.xml"
-                                                    } else {
-                                                        echo "Test failed to generate JUNIT file"
-                                                    }
+                                                } catch (Exception e) {
+                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Error: ${e.getMessage()}"
+                                                    failed++
                                                 }
                                             } else {
-                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Unable to get scripted test: ${httpCode}"
+                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - HTTP Error"
+                                                failed++
                                             }
-                                            count++
                                         }
                                     }
                                 }
+                                count++
                             }
                         }
 
                         parallel testJobs
 
-                        // Log the results to logs.txt
-                        testResults.eachWithIndex { result, index ->
-                            echo "${index + 1}. ${result.value}"
-
-                            // Append to the log file
-                            writeFile(file: logFile, text: "${readFile(logFile)}\n${index + 1}. ${result.value}")
-                            
-                            if (result.value.contains("Failed")) {
-                                allPassed = false
-                                failed += 1
-                            } else {
-                                passed += 1
-                            }
+                        // Final Results Logging
+                        def resultMessage = "Test Results:\n"
+                        testResults.each { result ->
+                            resultMessage += result + "\n"
                         }
-
-                        // Log summary results
-                        writeFile(file: logFile, text: "${readFile(logFile)}\nTotal Tests: ${testResults.size()}")
-                        writeFile(file: logFile, text: "${readFile(logFile)}\nPassed: ${passed}")
-                        writeFile(file: logFile, text: "${readFile(logFile)}\nFailed: ${failed}")
-
-                        // Display result summary in Jenkins console
-                        echo "Total Tests: ${testResults.size()}"
-                        echo "Passed: ${passed}"
-                        echo "Failed: ${failed}"
                         
-                        if (!allPassed) {
-                            error("Not all tests passed")
-                        }
-
-                        // Archive the log file for download
-                        archiveArtifacts artifacts: 'logs.txt', allowEmptyArchive: true
-                    }
-                }
-            }
-        }
-
-        stage('GitHub Checks') {
-            steps {
-                script {
-                    def startTime = System.currentTimeMillis()
-                    def timeout = 7  // 7 seconds timeout
-                    def checkCompleted = false
-
-                    try {
-                        while (System.currentTimeMillis() - startTime < timeout * 1000) {
-                            // Try to send results to GitHub if needed
-                            echo "Sending results to GitHub checks..."
-                            // Place your GitHub check integration code here
-                            
-                            checkCompleted = true
-                            break
-                        }
-
-                        if (!checkCompleted) {
-                            echo "GitHub checks timed out after ${timeout} seconds."
-                        }
-                    } catch (Exception e) {
-                        echo "Error while sending results to GitHub: ${e.message}"
+                        writeFile file: logFile, text: resultMessage
+                        archiveArtifacts artifacts: logFile, allowEmptyArchive: true
+                        echo "Test run completed. Passed: ${passed}, Failed: ${failed}"
                     }
                 }
             }
