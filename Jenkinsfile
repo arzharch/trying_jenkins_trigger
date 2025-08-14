@@ -205,27 +205,41 @@ pipeline {
                                             echo "Test executable response code - ${httpCode}"
 
                                             try {
+                                                // Check if the HTTP response code is 200 OK
                                                 if (httpCode.contains("200")) {
                                                     echo "Executing - '${tests[index].Name}' ${datasetType}"
+                                            
+                                                    // Execute the test command using the test ID and useMango API key
                                                     bat "\"%UM_PYTHON_PATH%\" ${tests[index].Id}.pyz -k '%useMangoApiKey%' -j result.xml"
+                                            
+                                                    // Read the result from the result.xml file
                                                     def result = readXML file: 'result.xml'
+                                            
+                                                    // Get the run ID (for tracking test execution)
                                                     def run_id = getRunId()
-                                                    
+                                            
+                                                    // Check if the run_id is valid (non-null)
                                                     if (run_id != null) {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed)"
-                                                        passed++
+                                                        // If run_id exists, mark test as passed
+                                                        testResults.put(count, "TestName: '${tests[index].Name}' ${datasetType} (Passed)")
+                                                        passed++ // Increment passed tests counter
                                                     } else {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - No RunId found"
-                                                        failed++
+                                                        // If no run_id found, mark test as failed with specific message
+                                                        testResults.put(count, "TestName: '${tests[index].Name}' ${datasetType} (Failed) - No RunId found")
+                                                        failed++ // Increment failed tests counter
                                                     }
                                                 } else {
-                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - HTTP Error"
-                                                    failed++
+                                                    // HTTP error occurred, mark test as failed with HTTP error message
+                                                    testResults.put(count, "TestName: '${tests[index].Name}' ${datasetType} (Failed) - HTTP Error ${httpCode}")
+                                                    failed++ // Increment failed tests counter
                                                 }
                                             } catch (Exception e) {
-                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Error: ${e.getMessage()}"
-                                                failed++
+                                                // Catch any other exceptions, log them and mark the test as failed
+                                                testResults.put(count, "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Error: ${e.getMessage()}")
+                                                failed++ // Increment failed tests counter
+                                                echo "Error during execution of test '${tests[index].Name}': ${e.getMessage()}"
                                             }
+
                                         }
                                     }
                                 }
