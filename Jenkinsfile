@@ -204,31 +204,33 @@ pipeline {
                                             String httpCode = powershell(returnStdout: true, script: "Write-Output (Get-Content \"response.txt\" | select -First 1 | Select-String -Pattern '.*HTTP/1.1 ([^\\\"]*) *').Matches.Groups[1].Value")
                                             echo "Test executable response code - ${httpCode}"
 
-                                            if (httpCode.contains("200")) {
-                                                echo "Executing - '${tests[index].Name}' ${datasetType}"
-                                                try {
-                                                    bat "\"%UM_PYTHON_PATH%\" ${tests[index].Id}.pyz -k " + '%useMangoApiKey%' + " -j result.xml"
-                                                    String run_id = getRunId()
+                                            try {
+                                                if (httpCode.contains("200")) {
+                                                    echo "Executing - '${tests[index].Name}' ${datasetType}"
+                                                    bat "\"%UM_PYTHON_PATH%\" ${tests[index].Id}.pyz -k '%useMangoApiKey%' -j result.xml"
+                                                    def result = readXML file: 'result.xml'
+                                                    def run_id = getRunId()
+                                                    
                                                     if (run_id != null) {
-                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed) - ${APP_WEBSITE_URL}/p/${params['Project ID']}/executions/${run_id}"
+                                                        testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Passed)"
                                                         passed++
                                                     } else {
                                                         testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - No RunId found"
                                                         failed++
                                                     }
-                                                } catch (Exception e) {
-                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Error: ${e.getMessage()}"
+                                                } else {
+                                                    testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - HTTP Error"
                                                     failed++
                                                 }
-                                            } else {
-                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - HTTP Error"
+                                            } catch (Exception e) {
+                                                testResults[count] = "TestName: '${tests[index].Name}' ${datasetType} (Failed) - Error: ${e.getMessage()}"
                                                 failed++
                                             }
                                         }
                                     }
                                 }
-                                count++
                             }
+                            count++
                         }
 
                         parallel testJobs
